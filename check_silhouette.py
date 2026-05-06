@@ -5,11 +5,21 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 
-from src.preprocessing import load_and_clean_data
-from src.rfm import compute_rfm
+from backend.preprocessing import clean_dataframe as load_and_clean_data
+from backend.rfm import compute_rfm
+
+import pandas as pd
+from pathlib import Path
+
+DATA_FILE = Path("data/Online Retail.xlsx")
 
 # Load and prepare data
-df = load_and_clean_data()
+if not DATA_FILE.exists():
+    print(f"Data file not found at {DATA_FILE}")
+    exit()
+
+df_raw = pd.read_excel(DATA_FILE)
+df = load_and_clean_data(df_raw)
 rfm = compute_rfm(df)
 
 # Scale RFM values

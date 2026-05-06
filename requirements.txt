@@ -5,3 +5,6 @@ scikit-learn
 openpyxl
 aiofiles
 python-multipart
+matplotlib
+seaborn
+ipykernel
