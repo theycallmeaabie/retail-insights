@@ -1,14 +1,31 @@
 'use strict';
 
+// ─── Auth token ───────────────────────────────────────────────────────────────
+const auth = {
+  getToken()  { return localStorage.getItem('retail_token'); },
+  setToken(t) { localStorage.setItem('retail_token', t); },
+  clearToken(){ localStorage.removeItem('retail_token'); },
+};
+
 // ─── API ──────────────────────────────────────────────────────────────────────
 const api = {
-  _get(path) { return fetch(path).then(r => r.json()); },
-  _post(path, body) {
-    return fetch(path, {
+  _h() {
+    const t = auth.getToken();
+    return t ? { 'Authorization': `Bearer ${t}` } : {};
+  },
+  async _get(path) {
+    const r = await fetch(path, { headers: this._h() });
+    if (r.status === 401) { logout(); return null; }
+    return r.json();
+  },
+  async _post(path, body) {
+    const r = await fetch(path, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...this._h() },
       body: JSON.stringify(body),
-    }).then(r => r.json());
+    });
+    if (r.status === 401) { logout(); return null; }
+    return r.json();
   },
   stats:         () => api._get('/api/stats'),
   monthlyRevenue:() => api._get('/api/revenue/monthly'),
@@ -688,7 +705,7 @@ async function renderUpdateData() {
     form.append('file', chosenFile);
 
     try {
-      const res = await fetch('/api/upload', { method: 'POST', body: form });
+      const res = await fetch('/api/upload', { method: 'POST', headers: api._h(), body: form });
       const data = await res.json();
 
       if (!res.ok) {
@@ -725,6 +742,136 @@ async function renderUpdateData() {
   });
 }
 
+// ─── Auth UI ──────────────────────────────────────────────────────────────────
+
+function showLogin() {
+  q('#login-overlay').classList.remove('hidden');
+  q('#app').classList.add('hidden');
+  q('#login-pane').style.display = '';
+  q('#register-pane').style.display = 'none';
+  const le = q('#login-error');
+  const re = q('#register-error');
+  if (le) { le.style.display = 'none'; le.textContent = ''; }
+  if (re) { re.style.display = 'none'; re.textContent = ''; }
+}
+
+function showApp(username) {
+  q('#login-overlay').classList.add('hidden');
+  q('#app').classList.remove('hidden');
+  const chip = q('#topbar-username');
+  if (chip) chip.textContent = username;
+}
+
+function logout() {
+  auth.clearToken();
+  freshToken();
+  showLogin();
+}
+
+function initAuthHandlers() {
+  const loginBtn    = q('#login-btn');
+  const loginErr    = q('#login-error');
+  const registerBtn = q('#register-btn');
+  const regErr      = q('#register-error');
+
+  async function doLogin() {
+    const username = q('#login-username').value.trim();
+    const password = q('#login-password').value;
+    if (!username || !password) {
+      loginErr.textContent = 'Please enter username and password.';
+      loginErr.style.display = 'block';
+      return;
+    }
+    loginBtn.disabled = true;
+    loginBtn.textContent = 'Signing in…';
+    loginErr.style.display = 'none';
+    try {
+      const r = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        loginErr.textContent = data.detail || 'Login failed.';
+        loginErr.style.display = 'block';
+      } else {
+        auth.setToken(data.access_token);
+        showApp(username);
+        if (!location.hash) location.hash = '#dashboard';
+        navigate();
+      }
+    } catch {
+      loginErr.textContent = 'Network error — is the server running?';
+      loginErr.style.display = 'block';
+    }
+    loginBtn.disabled = false;
+    loginBtn.textContent = 'Sign in';
+  }
+
+  loginBtn.addEventListener('click', doLogin);
+  q('#login-password').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+
+  async function doRegister() {
+    const username = q('#reg-username').value.trim();
+    const password = q('#reg-password').value;
+    const confirm  = q('#reg-confirm').value;
+    if (!username || !password) {
+      regErr.textContent = 'Please fill in all fields.';
+      regErr.style.display = 'block';
+      return;
+    }
+    if (password !== confirm) {
+      regErr.textContent = 'Passwords do not match.';
+      regErr.style.display = 'block';
+      return;
+    }
+    registerBtn.disabled = true;
+    registerBtn.textContent = 'Creating account…';
+    regErr.style.display = 'none';
+    try {
+      const r = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        regErr.textContent = data.detail || 'Registration failed.';
+        regErr.style.display = 'block';
+      } else {
+        q('#register-pane').style.display = 'none';
+        q('#login-pane').style.display = '';
+        q('#login-username').value = username;
+        q('#login-password').value = '';
+        q('#login-password').focus();
+      }
+    } catch {
+      regErr.textContent = 'Network error — is the server running?';
+      regErr.style.display = 'block';
+    }
+    registerBtn.disabled = false;
+    registerBtn.textContent = 'Create account';
+  }
+
+  registerBtn.addEventListener('click', doRegister);
+  q('#reg-confirm').addEventListener('keydown', (e) => { if (e.key === 'Enter') doRegister(); });
+
+  q('#go-register').addEventListener('click', (e) => {
+    e.preventDefault();
+    q('#login-pane').style.display = 'none';
+    q('#register-pane').style.display = '';
+  });
+
+  q('#go-login').addEventListener('click', (e) => {
+    e.preventDefault();
+    q('#register-pane').style.display = 'none';
+    q('#login-pane').style.display = '';
+  });
+
+  q('#logout-btn').addEventListener('click', logout);
+}
+
 // ─── Router ───────────────────────────────────────────────────────────────────
 const PAGES = {
   dashboard:     { title: 'Dashboard',   render: renderDashboard   },
@@ -748,7 +895,14 @@ function navigate() {
 
 window.addEventListener('hashchange', navigate);
 
-window.addEventListener('DOMContentLoaded', () => {
+window.addEventListener('DOMContentLoaded', async () => {
+  initAuthHandlers();
+  const token = auth.getToken();
+  if (!token) { showLogin(); return; }
+  const r = await fetch('/api/auth/me', { headers: { 'Authorization': `Bearer ${token}` } });
+  if (!r.ok) { auth.clearToken(); showLogin(); return; }
+  const { username } = await r.json();
+  showApp(username);
   if (!location.hash) location.hash = '#dashboard';
   navigate();
 });

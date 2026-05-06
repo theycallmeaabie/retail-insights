@@ -2,7 +2,7 @@ import io
 import pandas as pd
 from pathlib import Path
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -11,6 +11,7 @@ from preprocessing import clean_dataframe
 from rfm import compute_rfm
 from clustering import add_clusters
 from recommender import build_item_matrix, get_recommendations
+from auth import init_db, create_user, authenticate, make_token, get_current_user
 
 DATA_FILE = Path(__file__).parent.parent / "data" / "Online Retail.xlsx"
 
@@ -35,6 +36,7 @@ def _load():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    init_db()
     _load()
     yield
 
@@ -52,8 +54,48 @@ def pipeline():
     return _df, _rfm, _matrix
 
 
+# ── Auth ───────────────────────────────────────────────────────────────────────
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/api/auth/login")
+def login(req: LoginRequest):
+    user = authenticate(req.username, req.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Incorrect username or password")
+    return {"access_token": make_token(req.username), "token_type": "bearer"}
+
+
+@app.post("/api/auth/register")
+def register(req: RegisterRequest):
+    if len(req.username) < 3:
+        raise HTTPException(status_code=400, detail="Username must be at least 3 characters")
+    if len(req.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    try:
+        create_user(req.username, req.password)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {"message": "Account created"}
+
+
+@app.get("/api/auth/me")
+def me(user: dict = Depends(get_current_user)):
+    return {"username": user["username"]}
+
+
+# ── Data API ───────────────────────────────────────────────────────────────────
+
 @app.get("/api/stats")
-def stats():
+def stats(_auth: dict = Depends(get_current_user)):
     df, _, _ = pipeline()
     if df is None:
         return {"revenue": 0, "customers": 0, "transactions": 0}
@@ -65,7 +107,7 @@ def stats():
 
 
 @app.get("/api/revenue/monthly")
-def monthly_revenue():
+def monthly_revenue(_auth: dict = Depends(get_current_user)):
     df, _, _ = pipeline()
     if df is None:
         return []
@@ -81,7 +123,7 @@ def monthly_revenue():
 
 
 @app.get("/api/segments")
-def segments():
+def segments(_auth: dict = Depends(get_current_user)):
     _, rfm, _ = pipeline()
     if rfm is None:
         return {"averages": [], "counts": []}
@@ -104,7 +146,7 @@ def segments():
 
 
 @app.get("/api/customers/top")
-def top_customers():
+def top_customers(_auth: dict = Depends(get_current_user)):
     _, rfm, _ = pipeline()
     if rfm is None:
         return []
@@ -119,7 +161,7 @@ def top_customers():
 
 
 @app.get("/api/products/top")
-def top_products():
+def top_products(_auth: dict = Depends(get_current_user)):
     df, _, _ = pipeline()
     if df is None:
         return []
@@ -129,7 +171,7 @@ def top_products():
 
 
 @app.get("/api/products")
-def products():
+def products(_auth: dict = Depends(get_current_user)):
     df, _, _ = pipeline()
     if df is None:
         return []
@@ -147,7 +189,7 @@ class RecommendRequest(BaseModel):
 
 
 @app.post("/api/recommend")
-def recommend(req: RecommendRequest):
+def recommend(req: RecommendRequest, _auth: dict = Depends(get_current_user)):
     df, _, matrix = pipeline()
     if matrix is None:
         return []
@@ -160,7 +202,7 @@ def recommend(req: RecommendRequest):
 
 
 @app.post("/api/upload")
-async def upload_data(file: UploadFile = File(...)):
+async def upload_data(file: UploadFile = File(...), _auth: dict = Depends(get_current_user)):
     name = file.filename or ""
     if not (name.endswith(".xlsx") or name.endswith(".xls") or name.endswith(".csv")):
         raise HTTPException(status_code=400, detail="Only .xlsx, .xls, or .csv files are accepted.")
@@ -188,7 +230,7 @@ async def upload_data(file: UploadFile = File(...)):
 
 
 @app.get("/api/datafile")
-def datafile_info():
+def datafile_info(_auth: dict = Depends(get_current_user)):
     if not DATA_FILE.exists():
         return {"exists": False}
     stat = DATA_FILE.stat()
